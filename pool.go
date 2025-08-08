@@ -38,13 +38,32 @@ var defaultPool Pool
 //go:linkname mallocgc runtime.mallocgc
 func mallocgc(size uintptr, typ unsafe.Pointer, needzero bool) unsafe.Pointer
 
-func MakeNoZero(l int) []byte {
+func makeNoZero(l int) []byte {
 	return unsafe.Slice((*byte)(mallocgc(uintptr(l), nil, false)), l)
 
 }
 
-func MakeNoZeroCap(l int, c int) []byte {
-	return MakeNoZero(c)[:l]
+func makeNoZeroCap(l int, c int) []byte {
+	return makeNoZero(c)[:l]
+}
+
+//go:linkname memmove runtime.memmove
+func memmove(dst, src unsafe.Pointer, n uintptr)
+
+//go:nocheckptr
+func copyUnsafe[T any](dst []T, src []T) int {
+	memmove(unsafe.Pointer(&dst[0]), unsafe.Pointer(&src[0]), uintptr(len(src)))
+	return len(src)
+}
+
+func memsetSlice[T any](s []T, value T) {
+	if len(s) == 0 {
+		return
+	}
+	s[0] = value
+	for i := 1; i < len(s); i *= 2 {
+		copyUnsafe(s[i:], s[:i])
+	}
 }
 
 // Get returns an empty byte buffer from the pool.
@@ -64,7 +83,7 @@ func (p *Pool) Get() *ByteBuffer {
 		return v.(*ByteBuffer)
 	}
 	return &ByteBuffer{
-		B: MakeNoZeroCap(0, int(atomic.LoadUint64(&p.defaultSize))),
+		B: makeNoZeroCap(0, int(atomic.LoadUint64(&p.defaultSize))),
 	}
 }
 
@@ -86,6 +105,7 @@ func (p *Pool) Put(b *ByteBuffer) {
 
 	maxSize := int(atomic.LoadUint64(&p.maxSize))
 	if maxSize == 0 || cap(b.B) <= maxSize {
+		memsetSlice(b.B, 0)
 		b.Reset()
 		p.pool.Put(b)
 	}
