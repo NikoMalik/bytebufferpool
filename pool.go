@@ -56,14 +56,18 @@ func copyUnsafe[T any](dst []T, src []T) int {
 	return len(src)
 }
 
-func memsetSlice[T any](s []T, value T) {
+//go:linkname memclrNoHeapPointers runtime.memclrNoHeapPointers
+func memclrNoHeapPointers(p unsafe.Pointer, n uintptr)
+
+// MemclrZero sets memory of slice to zero, assuming T has no heap pointers.
+// T MUST NOT contain any references (e.g. pointers, strings, slices, maps, funcs).
+func memclr[T any](s []T) {
 	if len(s) == 0 {
 		return
 	}
-	s[0] = value
-	for i := 1; i < len(s); i *= 2 {
-		copyUnsafe(s[i:], s[:i])
-	}
+	size := unsafe.Sizeof(s[0]) * uintptr(len(s))
+	ptr := unsafe.Pointer(&s[0])
+	memclrNoHeapPointers(ptr, size)
 }
 
 // Get returns an empty byte buffer from the pool.
@@ -105,7 +109,7 @@ func (p *Pool) Put(b *ByteBuffer) {
 
 	maxSize := int(atomic.LoadUint64(&p.maxSize))
 	if maxSize == 0 || cap(b.B) <= maxSize {
-		memsetSlice(b.B, 0)
+		memclr(b.B)
 		b.Reset()
 		p.pool.Put(b)
 	}
@@ -115,6 +119,7 @@ func (p *Pool) calibrate() {
 	if !atomic.CompareAndSwapUint64(&p.calibrating, 0, 1) {
 		return
 	}
+	defer atomic.StoreUint64(&p.calibrating, 0)
 
 	a := make(callSizes, 0, steps)
 	var callsSum uint64
@@ -126,13 +131,17 @@ func (p *Pool) calibrate() {
 			size:  minSize << i,
 		})
 	}
+
+	if callsSum < calibrateCallsThreshold/2 {
+		return
+	}
+
 	slices.SortFunc(a, func(i, j callSize) int {
 		return int(j.calls - i.calls)
 	})
 
 	defaultSize := a[0].size
 	maxSize := defaultSize
-
 	maxSum := uint64(float64(callsSum) * maxPercentile)
 	callsSum = 0
 	for i := 0; i < steps; i++ {
@@ -148,8 +157,6 @@ func (p *Pool) calibrate() {
 
 	atomic.StoreUint64(&p.defaultSize, defaultSize)
 	atomic.StoreUint64(&p.maxSize, maxSize)
-
-	atomic.StoreUint64(&p.calibrating, 0)
 }
 
 type callSize struct {

@@ -42,7 +42,7 @@ func (b *ByteBuffer) ReadFrom(r io.Reader) (int64, error) {
 		if n == nMax {
 			nMax *= 2
 			bNew := make([]byte, nMax)
-			copy(bNew, p)
+			copyUnsafe(bNew, p)
 			p = bNew
 		}
 		nn, err := r.Read(p[n:])
