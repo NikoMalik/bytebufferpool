@@ -1,3 +1,3 @@
 module github.com/valyala/bytebufferpool
 
-go 1.12
+go 1.24

@@ -1,9 +1,10 @@
 package bytebufferpool
 
 import (
-	"sort"
+	"slices"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 )
 
 const (
@@ -34,6 +35,18 @@ type Pool struct {
 
 var defaultPool Pool
 
+//go:linkname mallocgc runtime.mallocgc
+func mallocgc(size uintptr, typ unsafe.Pointer, needzero bool) unsafe.Pointer
+
+func MakeNoZero(l int) []byte {
+	return unsafe.Slice((*byte)(mallocgc(uintptr(l), nil, false)), l)
+
+}
+
+func MakeNoZeroCap(l int, c int) []byte {
+	return MakeNoZero(c)[:l]
+}
+
 // Get returns an empty byte buffer from the pool.
 //
 // Got byte buffer may be returned to the pool via Put call.
@@ -51,7 +64,7 @@ func (p *Pool) Get() *ByteBuffer {
 		return v.(*ByteBuffer)
 	}
 	return &ByteBuffer{
-		B: make([]byte, 0, atomic.LoadUint64(&p.defaultSize)),
+		B: MakeNoZeroCap(0, int(atomic.LoadUint64(&p.defaultSize))),
 	}
 }
 
@@ -93,7 +106,9 @@ func (p *Pool) calibrate() {
 			size:  minSize << i,
 		})
 	}
-	sort.Sort(a)
+	slices.SortFunc(a, func(i, j callSize) int {
+		return int(j.calls - i.calls)
+	})
 
 	defaultSize := a[0].size
 	maxSize := defaultSize
